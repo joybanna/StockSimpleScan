@@ -115,6 +115,16 @@ div[role="radiogroup"] label:has(input:checked) {
 
 /* ── Divider ── */
 hr { border-color: #E8E0D8; margin: 1.25rem 0; }
+
+/* ── Legend grid ── */
+.legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; }
+.legend-block { background: #FAF8F5; border: 1.5px solid #E8E0D8; border-radius: 10px; padding: 0.75rem 1rem; }
+.legend-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8B7355; margin-bottom: 0.4rem; }
+.legend-row { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 0.15rem 0; border-bottom: 1px solid #F0EBE3; }
+.legend-row:last-child { border-bottom: none; }
+.legend-key { color: #6B5E54; font-weight: 500; }
+.legend-val { color: #9C8E83; text-align: right; max-width: 60%; }
+.rr-example { margin-top: 0.5rem; background: #F5F0E8; border-radius: 8px; padding: 0.5rem 0.75rem; font-size: 0.78rem; color: #6B5E54; line-height: 1.6; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -405,6 +415,54 @@ with right:
     RSI period <b>{p['rsi']}</b> &nbsp;·&nbsp; MACD <b>{p['fast']}/{p['slow']}/{p['signal']}</b><br>
     Fibonacci: swing high/low 50 candles · levels 0–161.8%
     </div>""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UI — Legend
+# ─────────────────────────────────────────────────────────────────────────────
+
+with st.expander("📖 How to read the results"):
+    st.markdown("""
+<div class="legend-grid">
+
+<div class="legend-block">
+<div class="legend-title">RSI (Relative Strength Index)</div>
+<div class="legend-row"><span class="legend-key">🔴 Overbought</span><span class="legend-val">RSI > 70 · ราคาสูงเกินไป อาจปรับตัวลง</span></div>
+<div class="legend-row"><span class="legend-key">🟢 Oversold</span><span class="legend-val">RSI < 30 · ราคาต่ำเกินไป อาจเด้งกลับ</span></div>
+<div class="legend-row"><span class="legend-key">⚪ Neutral</span><span class="legend-val">RSI 30–70 · ยังไม่มีสัญญาณชัดเจน</span></div>
+</div>
+
+<div class="legend-block">
+<div class="legend-title">MACD</div>
+<div class="legend-row"><span class="legend-key">🟢 Golden Cross</span><span class="legend-val">MACD ตัด Signal ขึ้น · สัญญาณซื้อ</span></div>
+<div class="legend-row"><span class="legend-key">🔴 Death Cross</span><span class="legend-val">MACD ตัด Signal ลง · สัญญาณขาย</span></div>
+<div class="legend-row"><span class="legend-key">⚪ Steady</span><span class="legend-val">ไม่มี Crossover · รอสัญญาณ</span></div>
+</div>
+
+<div class="legend-block">
+<div class="legend-title">Recommendation</div>
+<div class="legend-row"><span class="legend-key">🚀 Strong Buy</span><span class="legend-val">RSI Oversold + MACD Golden Cross</span></div>
+<div class="legend-row"><span class="legend-key">✅ Buy</span><span class="legend-val">MACD Golden Cross เท่านั้น</span></div>
+<div class="legend-row"><span class="legend-key">⏳ Wait</span><span class="legend-val">ยังไม่มีสัญญาณชัดเจน</span></div>
+<div class="legend-row"><span class="legend-key">❌ Sell</span><span class="legend-val">MACD Death Cross เท่านั้น</span></div>
+<div class="legend-row"><span class="legend-key">🔥 Strong Sell</span><span class="legend-val">RSI Overbought + MACD Death Cross</span></div>
+</div>
+
+<div class="legend-block">
+<div class="legend-title">Fibonacci &amp; R/R</div>
+<div class="legend-row"><span class="legend-key">Fib Resist</span><span class="legend-val">ระดับต้านใกล้สุด (Upside target)</span></div>
+<div class="legend-row"><span class="legend-key">Fib Support</span><span class="legend-val">ระดับรับใกล้สุด (Downside risk)</span></div>
+<div class="legend-row"><span class="legend-key">Upside %</span><span class="legend-val">% กำไรถ้าราคาถึง Fib Resist</span></div>
+<div class="legend-row"><span class="legend-key">Downside %</span><span class="legend-val">% ขาดทุนถ้าราคาถึง Fib Support</span></div>
+<div class="legend-row"><span class="legend-key">R/R</span><span class="legend-val">Upside ÷ Downside · > 1.0 คุ้มค่า</span></div>
+<div class="rr-example">
+<b>ตัวอย่าง R/R = 2.0</b><br>
+ราคา 100 · Resist 108 (+8%) · Support 104 (-4%)<br>
+R/R = 8 ÷ 4 = <b>2.0</b> → ถูก ได้ 2 บาท / ผิด เสีย 1 บาท
+</div>
+</div>
+
+</div>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UI — Scan button
