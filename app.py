@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 
 st.set_page_config(page_title="Stock Signal Scanner", layout="wide")
 st.title("Stock Signal Scanner")
@@ -18,6 +17,24 @@ ticker_input = st.text_input(
 scan_btn = st.button("Scan", type="primary")
 
 
+def calc_rsi(close, period=14):
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def calc_macd(close, fast=12, slow=26, signal=9):
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+
 def get_rsi_status(rsi):
     if pd.isna(rsi):
         return "N/A", ""
@@ -31,11 +48,9 @@ def get_rsi_status(rsi):
 def get_macd_status(macd, signal, prev_macd, prev_signal):
     if any(pd.isna(v) for v in [macd, signal, prev_macd, prev_signal]):
         return "N/A", ""
-    crossed_above = (prev_macd <= prev_signal) and (macd > signal)
-    crossed_below = (prev_macd >= prev_signal) and (macd < signal)
-    if crossed_above:
+    if (prev_macd <= prev_signal) and (macd > signal):
         return "Golden Cross", "🟢"
-    if crossed_below:
+    if (prev_macd >= prev_signal) and (macd < signal):
         return "Death Cross", "🔴"
     return "Steady", "⚪"
 
@@ -61,22 +76,16 @@ def analyze_ticker(ticker):
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
         df.dropna(inplace=True)
 
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        close = df["Close"]
+        rsi_series = calc_rsi(close)
+        macd_line, signal_line = calc_macd(close)
 
-        rsi_col = [c for c in df.columns if c.startswith("RSI_")]
-        macd_col = [c for c in df.columns if c.startswith("MACD_") and "s" not in c.lower() and "h" not in c.lower()]
-        signal_col = [c for c in df.columns if c.startswith("MACDs_")]
-
-        if not rsi_col or not macd_col or not signal_col:
-            return None
-
-        rsi = df[rsi_col[0]].iloc[-1]
-        macd = df[macd_col[0]].iloc[-1]
-        signal = df[signal_col[0]].iloc[-1]
-        prev_macd = df[macd_col[0]].iloc[-2]
-        prev_signal = df[signal_col[0]].iloc[-2]
-        price = df["Close"].iloc[-1]
+        rsi = rsi_series.iloc[-1]
+        macd = macd_line.iloc[-1]
+        signal = signal_line.iloc[-1]
+        prev_macd = macd_line.iloc[-2]
+        prev_signal = signal_line.iloc[-2]
+        price = close.iloc[-1]
 
         rsi_status, rsi_icon = get_rsi_status(rsi)
         macd_status, macd_icon = get_macd_status(macd, signal, prev_macd, prev_signal)
