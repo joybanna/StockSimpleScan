@@ -201,9 +201,10 @@ def get_market(ticker: str) -> tuple[str, str]:
     return ("🇺🇸", "US (NYSE / NASDAQ)")
 
 
-def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9):
+def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9,
+                   interval="1d", dl_period="6mo", timeframe_label="Daily"):
     try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=True)
+        df = yf.download(ticker, period=dl_period, interval=interval, progress=False, auto_adjust=True)
         if df is None or len(df) < 50:
             return None
 
@@ -233,14 +234,14 @@ def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signa
             "Ticker": ticker.upper(),
             "Price": round(float(price), 2),
             "Price Date": price_date,
-            f"RSI ({rsi_period})": round(float(rsi), 1) if not pd.isna(rsi) else "N/A",
+            f"RSI ({rsi_period}·{timeframe_label})": round(float(rsi), 1) if not pd.isna(rsi) else "N/A",
             "RSI Status": f"{rsi_icon} {rsi_status}",
             "MACD Status": f"{macd_icon} {macd_status}",
             "Recommendation": f"{rec_icon} {rec}",
         }
     except Exception as e:
         flag, market_name = get_market(ticker)
-        return {"_market_key": market_name, "_market_label": f"{flag} {market_name}", "Ticker": ticker.upper(), "Price": "Error", "Price Date": "-", f"RSI ({rsi_period})": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
+        return {"_market_key": market_name, "_market_label": f"{flag} {market_name}", "Ticker": ticker.upper(), "Price": "Error", "Price Date": "-", f"RSI ({rsi_period}·{timeframe_label})": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
 
 
 # ── Google Sheet / CSV import ─────────────────────────────────────────────────
@@ -344,18 +345,31 @@ elif input_mode == "Upload CSV / Excel":
         else:
             st.error("Could not read tickers — check that tickers are in column A.")
 
+PRESETS = {
+    "Day":   {"interval": "1d",  "dl_period": "6mo", "rsi": 14, "fast": 12, "slow": 26, "signal": 9, "label": "Daily"},
+    "Week":  {"interval": "1wk", "dl_period": "2y",  "rsi": 14, "fast": 12, "slow": 26, "signal": 9, "label": "Weekly"},
+    "Month": {"interval": "1mo", "dl_period": "5y",  "rsi": 14, "fast": 12, "slow": 26, "signal": 9, "label": "Monthly"},
+}
+
 st.markdown("")
-with st.expander("⚙️ Indicator settings"):
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        st.markdown("**RSI**")
-        rsi_period = st.number_input("Period", min_value=2, max_value=50, value=14, step=1, key="rsi_period")
-    with col2:
-        st.markdown("**MACD**")
-        mc1, mc2, mc3 = st.columns(3)
-        macd_fast   = mc1.number_input("Fast",   min_value=2,  max_value=50,  value=12, step=1, key="macd_fast")
-        macd_slow   = mc2.number_input("Slow",   min_value=5,  max_value=200, value=26, step=1, key="macd_slow")
-        macd_signal = mc3.number_input("Signal", min_value=2,  max_value=50,  value=9,  step=1, key="macd_signal")
+preset_choice = st.radio(
+    "Timeframe",
+    list(PRESETS.keys()),
+    horizontal=True,
+    label_visibility="collapsed",
+    format_func=lambda x: {"Day": "📅 Day", "Week": "📆 Week", "Month": "🗓️ Month"}[x],
+)
+p = PRESETS[preset_choice]
+
+with st.expander("⚙️ Settings detail"):
+    st.markdown(f"""
+| | Value |
+|---|---|
+| Candle interval | **{p['label']}** (`{p['interval']}`) |
+| Lookback period | `{p['dl_period']}` |
+| RSI period | `{p['rsi']}` |
+| MACD | Fast `{p['fast']}` · Slow `{p['slow']}` · Signal `{p['signal']}` |
+""")
 
 scan_btn = st.button("Scan", type="primary", disabled=not tickers_ready, use_container_width=False)
 
@@ -367,7 +381,11 @@ if scan_btn and tickers_ready:
     progress = st.progress(0, text="")
     for i, ticker in enumerate(tickers_ready):
         progress.progress((i + 1) / len(tickers_ready), text=f"Scanning {ticker}…")
-        row = analyze_ticker(ticker, rsi_period=rsi_period, macd_fast=macd_fast, macd_slow=macd_slow, macd_signal=macd_signal)
+        row = analyze_ticker(
+            ticker,
+            rsi_period=p["rsi"], macd_fast=p["fast"], macd_slow=p["slow"], macd_signal=p["signal"],
+            interval=p["interval"], dl_period=p["dl_period"], timeframe_label=p["label"],
+        )
         if row:
             results.append(row)
 
@@ -377,7 +395,7 @@ if scan_btn and tickers_ready:
         st.markdown("---")
 
         # ── Group by market, US first then Thailand then rest alphabetically ──
-        rsi_col = f"RSI ({rsi_period})"
+        rsi_col = f"RSI ({p['rsi']}·{p['label']})"
         display_cols = ["Ticker", "Price", "Price Date", rsi_col, "RSI Status", "MACD Status", "Recommendation"]
 
         def market_sort_key(label: str) -> tuple:
