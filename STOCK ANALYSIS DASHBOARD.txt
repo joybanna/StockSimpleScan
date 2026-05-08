@@ -1,0 +1,76 @@
+======================================================================
+STOCK ANALYSIS DASHBOARD PLAN: MACD & RSI STATUS TABLE
+======================================================================
+
+[PROJECT OVERVIEW]
+Goal: Build a web-based dashboard that scans multiple stocks and 
+displays their technical status (RSI & MACD) in a clean table format.
+Language: Python
+Framework: Streamlit
+
+----------------------------------------------------------------------
+STEP 1: ENVIRONMENT SETUP
+----------------------------------------------------------------------
+1. Install Python (3.9 or higher).
+2. Create a project folder.
+3. Install necessary libraries via Terminal/Command Prompt:
+   pip install streamlit yfinance pandas pandas_ta
+
+----------------------------------------------------------------------
+STEP 2: DATA STRATEGY (BACKEND)
+----------------------------------------------------------------------
+1. Data Source: Use 'yfinance' to download OHLC data.
+2. Requirement: Download at least 100 days of historical data per 
+   stock to ensure MACD and RSI calculations are mathematically 
+   accurate (EMA requires a long look-back period).
+3. Data Cleaning: Remove any missing values (NaN) using df.dropna().
+
+----------------------------------------------------------------------
+STEP 3: TECHNICAL LOGIC (INDICATORS)
+----------------------------------------------------------------------
+1. RSI (Relative Strength Index):
+   - Period: 14 days.
+   - Status 'Overbought': RSI > 70 (Red Alert).
+   - Status 'Oversold': RSI < 30 (Green Alert).
+   - Status 'Neutral': RSI between 30 and 70.
+
+2. MACD (Moving Average Convergence Divergence):
+   - Fast: 12, Slow: 26, Signal: 9.
+   - Status 'Golden Cross': MACD crosses ABOVE Signal (Buy Signal).
+   - Status 'Death Cross': MACD crosses BELOW Signal (Sell Signal).
+   - Status 'Steady': No crossover in the last 2 days.
+
+----------------------------------------------------------------------
+STEP 4: DASHBOARD UI DESIGN (FRONTEND)
+----------------------------------------------------------------------
+1. Header: Title and short description of the tool.
+2. User Input: A text box to input tickers (e.g., AAPL, NVDA, PTT.BK).
+3. Refresh Button: A button to trigger the calculation.
+4. Main Table: A display area showing:
+   [ Ticker | Price | RSI Value | RSI Status | MACD Status | Action ]
+
+----------------------------------------------------------------------
+STEP 5: SCORING & RECOMMENDATION SYSTEM
+----------------------------------------------------------------------
+Create a "Recommendation" column based on combined logic:
+- STRONG BUY: RSI is Oversold AND MACD shows Golden Cross.
+- BUY: MACD shows Golden Cross but RSI is Neutral.
+- STRONG SELL: RSI is Overbought AND MACD shows Death Cross.
+- SELL: MACD shows Death Cross but RSI is Neutral.
+- WAIT: No clear signals from either indicator.
+
+----------------------------------------------------------------------
+STEP 6: DEPLOYMENT
+----------------------------------------------------------------------
+1. Create a 'requirements.txt' file containing:
+   streamlit
+   yfinance
+   pandas
+   pandas-ta
+2. Upload code to a GitHub repository.
+3. Connect GitHub to Streamlit Cloud (share.streamlit.io) for 
+   a live public URL.
+
+======================================================================
+END OF PLAN
+======================================================================
