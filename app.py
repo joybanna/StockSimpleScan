@@ -205,6 +205,53 @@ def get_market(ticker: str) -> tuple[str, str]:
     return ("🇺🇸", "US (NYSE / NASDAQ)")
 
 
+FIB_LEVELS = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618]
+
+def calc_fibonacci(high_s, low_s, price, lookback=50):
+    swing_high = float(high_s.tail(lookback).max())
+    swing_low  = float(low_s.tail(lookback).min())
+    diff       = swing_high - swing_low
+    price      = float(price)
+
+    # Retracement levels from high down + extension levels below low
+    levels = sorted(set([
+        round(swing_high - r * diff, 4) for r in FIB_LEVELS
+    ] + [
+        round(swing_low - (r - 1.0) * diff, 4) for r in [1.272, 1.618]
+    ]))
+
+    buf = price * 0.002  # 0.2% buffer to avoid sitting exactly on a level
+    above = [l for l in levels if l > price + buf]
+    below = [l for l in levels if l < price - buf]
+
+    resist  = min(above) if above else round(swing_high * 1.05, 4)
+    support = max(below) if below else round(swing_low  * 0.95, 4)
+
+    upside_pct   = round((resist  - price) / price * 100, 1)
+    downside_pct = round((price - support) / price * 100, 1)
+    rr           = round(upside_pct / downside_pct, 2) if downside_pct > 0 else 0.0
+
+    # Label nearest Fib ratio for display
+    fib_label_map = {
+        round(swing_high - r * diff, 4): f"{int(r*100) if r in [0,1] else r*100:.1f}%"
+        for r in FIB_LEVELS
+    }
+    resist_label  = fib_label_map.get(resist,  "Ext")
+    support_label = fib_label_map.get(support, "Ext")
+
+    return {
+        "fib_resist":      resist,
+        "fib_support":     support,
+        "fib_resist_lbl":  resist_label,
+        "fib_support_lbl": support_label,
+        "upside_pct":      upside_pct,
+        "downside_pct":    downside_pct,
+        "rr":              rr,
+        "swing_high":      round(swing_high, 2),
+        "swing_low":       round(swing_low, 2),
+    }
+
+
 def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9,
                    interval="1d", dl_period="6mo", timeframe_label="Daily"):
     try:
@@ -215,20 +262,23 @@ def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signa
         df.dropna(inplace=True)
 
         close = df["Close"]
+        high  = df["High"]
+        low   = df["Low"]
         rsi_series = calc_rsi(close, period=rsi_period)
         macd_line, signal_line = calc_macd(close, fast=macd_fast, slow=macd_slow, signal=macd_signal)
 
-        rsi      = rsi_series.iloc[-1]
-        macd     = macd_line.iloc[-1]
-        signal   = signal_line.iloc[-1]
+        rsi        = rsi_series.iloc[-1]
+        macd       = macd_line.iloc[-1]
+        signal     = signal_line.iloc[-1]
         prev_macd, prev_signal = macd_line.iloc[-2], signal_line.iloc[-2]
-        price    = close.iloc[-1]
+        price      = close.iloc[-1]
         price_date = df.index[-1].strftime("%Y-%m-%d")
 
         rsi_status, rsi_icon   = get_rsi_status(rsi)
         macd_status, macd_icon = get_macd_status(macd, signal, prev_macd, prev_signal)
         rec, rec_icon          = get_recommendation(rsi_status, macd_status)
         flag, market_name      = get_market(ticker)
+        fib = calc_fibonacci(high, low, price)
 
         return {
             "_market_key":   market_name,
@@ -240,6 +290,11 @@ def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signa
             "RSI Status":    f"{rsi_icon} {rsi_status}",
             "MACD Status":   f"{macd_icon} {macd_status}",
             "Recommendation": f"{rec_icon} {rec}",
+            "Fib Resist":    f"{fib['fib_resist']} ({fib['fib_resist_lbl']})",
+            "Fib Support":   f"{fib['fib_support']} ({fib['fib_support_lbl']})",
+            "Upside %":      f"+{fib['upside_pct']}%",
+            "Downside %":    f"-{fib['downside_pct']}%",
+            "R/R":           fib["rr"],
         }
     except Exception as e:
         flag, market_name = get_market(ticker)
@@ -247,7 +302,9 @@ def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signa
         return {"_market_key": market_name, "_market_label": f"{flag} {market_name}",
                 "Ticker": ticker.upper(), "Price": "Error", "Price Date": "-",
                 rsi_col: "-", "RSI Status": "-", "MACD Status": "-",
-                "Recommendation": str(e)[:40]}
+                "Recommendation": str(e)[:40],
+                "Fib Resist": "-", "Fib Support": "-",
+                "Upside %": "-", "Downside %": "-", "R/R": "-"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +402,8 @@ with right:
 
     st.markdown(f"""<div class="hint">
     Candle &nbsp;<b>{p['label']}</b> &nbsp;·&nbsp; Lookback <b>{p['dl_period']}</b><br>
-    RSI period <b>{p['rsi']}</b> &nbsp;·&nbsp; MACD <b>{p['fast']}/{p['slow']}/{p['signal']}</b>
+    RSI period <b>{p['rsi']}</b> &nbsp;·&nbsp; MACD <b>{p['fast']}/{p['slow']}/{p['signal']}</b><br>
+    Fibonacci: swing high/low 50 candles · levels 0–161.8%
     </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,7 +433,11 @@ if scan_btn and tickers_ready:
 
     if results:
         rsi_col      = f"RSI ({p['rsi']}·{p['label']})"
-        display_cols = ["Ticker", "Price", "Price Date", rsi_col, "RSI Status", "MACD Status", "Recommendation"]
+        display_cols = [
+            "Ticker", "Price", "Price Date",
+            rsi_col, "RSI Status", "MACD Status", "Recommendation",
+            "Fib Resist", "Fib Support", "Upside %", "Downside %", "R/R",
+        ]
 
         def market_sort_key(label: str) -> tuple:
             if "US "      in label: return (0, label)
