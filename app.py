@@ -220,6 +220,7 @@ def analyze_ticker(ticker):
         prev_macd = macd_line.iloc[-2]
         prev_signal = signal_line.iloc[-2]
         price = close.iloc[-1]
+        price_date = df.index[-1].strftime("%Y-%m-%d")
 
         rsi_status, rsi_icon = get_rsi_status(rsi)
         macd_status, macd_icon = get_macd_status(macd, signal, prev_macd, prev_signal)
@@ -231,14 +232,15 @@ def analyze_ticker(ticker):
             "_market_label": f"{flag} {market_name}",
             "Ticker": ticker.upper(),
             "Price": round(float(price), 2),
-            "RSI": round(float(rsi), 1) if not pd.isna(rsi) else "N/A",
+            "Price Date": price_date,
+            "RSI (Daily)": round(float(rsi), 1) if not pd.isna(rsi) else "N/A",
             "RSI Status": f"{rsi_icon} {rsi_status}",
             "MACD Status": f"{macd_icon} {macd_status}",
             "Recommendation": f"{rec_icon} {rec}",
         }
     except Exception as e:
         flag, market_name = get_market(ticker)
-        return {"_market_key": market_name, "_market_label": f"{flag} {market_name}", "Ticker": ticker.upper(), "Price": "Error", "RSI": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
+        return {"_market_key": market_name, "_market_label": f"{flag} {market_name}", "Ticker": ticker.upper(), "Price": "Error", "Price Date": "-", "RSI (Daily)": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
 
 
 # ── Google Sheet / CSV import ─────────────────────────────────────────────────
@@ -283,6 +285,24 @@ input_mode = st.radio("Source", ["Manual", "Google Sheet", "Upload CSV / Excel"]
 
 tickers_ready: list[str] = []
 
+TICKER_FORMAT_HELP = """
+**Ticker format**
+| Market | Pattern | Example |
+|---|---|---|
+| 🇺🇸 US (NYSE / NASDAQ) | `SYMBOL` | `AAPL`, `NVDA` |
+| 🇹🇭 Thailand (SET) | `SYMBOL.BK` | `PTT.BK`, `AOT.BK` |
+| 🇭🇰 Hong Kong | `SYMBOL.HK` | `0700.HK` |
+| 🇯🇵 Japan | `SYMBOL.T` | `7203.T` |
+| 🇸🇬 Singapore | `SYMBOL.SI` | `D05.SI` |
+| 🇬🇧 London | `SYMBOL.L` | `SHEL.L` |
+| 🇦🇺 Australia | `SYMBOL.AX` | `CBA.AX` |
+
+**Indicators used**
+- **Price** — closing price of the last trading day shown in *Price Date*
+- **RSI** — period 14, calculated on **daily** candles
+- **MACD** — fast 12 / slow 26 / signal 9, calculated on **daily** candles
+"""
+
 if input_mode == "Manual":
     ticker_input = st.text_input(
         "Tickers",
@@ -291,9 +311,18 @@ if input_mode == "Manual":
         label_visibility="collapsed",
     )
     tickers_ready = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
+    with st.expander("ℹ️ Ticker format & indicator reference"):
+        st.markdown(TICKER_FORMAT_HELP)
 
 elif input_mode == "Google Sheet":
-    st.markdown('<p class="caption">Sheet must be shared as "Anyone with the link can view" · Tickers in column A</p>', unsafe_allow_html=True)
+    with st.expander("ℹ️ How to set up your sheet"):
+        st.markdown(TICKER_FORMAT_HELP)
+        st.markdown("""
+**Sheet setup**
+1. Put one ticker per row in **column A** (no header needed)
+2. Share the sheet → *Anyone with the link* → **Viewer**
+3. Paste the URL below
+""")
     sheet_url = st.text_input("Sheet URL", placeholder="https://docs.google.com/spreadsheets/d/...", label_visibility="collapsed")
     if sheet_url:
         loaded = load_tickers_from_sheet(sheet_url)
@@ -304,7 +333,9 @@ elif input_mode == "Google Sheet":
             st.error("Could not read sheet — check the URL and sharing settings.")
 
 elif input_mode == "Upload CSV / Excel":
-    st.markdown('<p class="caption">Tickers in column A · header optional</p>', unsafe_allow_html=True)
+    with st.expander("ℹ️ File format guide"):
+        st.markdown(TICKER_FORMAT_HELP)
+        st.markdown("**File setup** — one ticker per row in column A, header optional.")
     uploaded = st.file_uploader("Upload", type=["csv", "xlsx", "xls"], label_visibility="collapsed")
     if uploaded:
         tickers_ready = load_tickers_from_file(uploaded)
@@ -334,7 +365,7 @@ if scan_btn and tickers_ready:
         st.markdown("---")
 
         # ── Group by market, US first then Thailand then rest alphabetically ──
-        display_cols = ["Ticker", "Price", "RSI", "RSI Status", "MACD Status", "Recommendation"]
+        display_cols = ["Ticker", "Price", "Price Date", "RSI (Daily)", "RSI Status", "MACD Status", "Recommendation"]
 
         def market_sort_key(label: str) -> tuple:
             if "US " in label:
