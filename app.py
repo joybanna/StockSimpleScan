@@ -176,6 +176,31 @@ def get_recommendation(rsi_status, macd_status):
     return "WAIT", "⏳"
 
 
+MARKET_MAP = {
+    "BK":  ("🇹🇭", "Thailand (SET)"),
+    "HK":  ("🇭🇰", "Hong Kong (HKEX)"),
+    "L":   ("🇬🇧", "London (LSE)"),
+    "T":   ("🇯🇵", "Japan (TSE)"),
+    "SI":  ("🇸🇬", "Singapore (SGX)"),
+    "AX":  ("🇦🇺", "Australia (ASX)"),
+    "KS":  ("🇰🇷", "South Korea (KRX)"),
+    "SS":  ("🇨🇳", "China (Shanghai)"),
+    "SZ":  ("🇨🇳", "China (Shenzhen)"),
+    "NS":  ("🇮🇳", "India (NSE)"),
+    "BO":  ("🇮🇳", "India (BSE)"),
+    "PA":  ("🇫🇷", "France (Euronext)"),
+    "DE":  ("🇩🇪", "Germany (XETRA)"),
+    "TW":  ("🇹🇼", "Taiwan (TWSE)"),
+}
+
+def get_market(ticker: str) -> tuple[str, str]:
+    parts = ticker.upper().split(".")
+    if len(parts) > 1:
+        suffix = parts[-1]
+        return MARKET_MAP.get(suffix, ("🌐", f"Other ({suffix})"))
+    return ("🇺🇸", "US (NYSE / NASDAQ)")
+
+
 def analyze_ticker(ticker):
     try:
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=True)
@@ -199,8 +224,11 @@ def analyze_ticker(ticker):
         rsi_status, rsi_icon = get_rsi_status(rsi)
         macd_status, macd_icon = get_macd_status(macd, signal, prev_macd, prev_signal)
         rec, rec_icon = get_recommendation(rsi_status, macd_status)
+        flag, market_name = get_market(ticker)
 
         return {
+            "_market_key": market_name,
+            "_market_label": f"{flag} {market_name}",
             "Ticker": ticker.upper(),
             "Price": round(float(price), 2),
             "RSI": round(float(rsi), 1) if not pd.isna(rsi) else "N/A",
@@ -209,7 +237,8 @@ def analyze_ticker(ticker):
             "Recommendation": f"{rec_icon} {rec}",
         }
     except Exception as e:
-        return {"Ticker": ticker.upper(), "Price": "Error", "RSI": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
+        flag, market_name = get_market(ticker)
+        return {"_market_key": market_name, "_market_label": f"{flag} {market_name}", "Ticker": ticker.upper(), "Price": "Error", "RSI": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
 
 
 # ── Google Sheet / CSV import ─────────────────────────────────────────────────
@@ -303,10 +332,30 @@ if scan_btn and tickers_ready:
 
     if results:
         st.markdown("---")
-        df_result = pd.DataFrame(results)
-        st.dataframe(df_result, use_container_width=True, hide_index=True)
 
-        st.markdown("")
+        # ── Group by market, US first then Thailand then rest alphabetically ──
+        display_cols = ["Ticker", "Price", "RSI", "RSI Status", "MACD Status", "Recommendation"]
+
+        def market_sort_key(label: str) -> tuple:
+            if "US " in label:
+                return (0, label)
+            if "Thailand" in label:
+                return (1, label)
+            return (2, label)
+
+        groups: dict[str, list] = {}
+        for r in results:
+            key = r["_market_label"]
+            groups.setdefault(key, []).append(r)
+
+        for label in sorted(groups.keys(), key=market_sort_key):
+            st.markdown(f"#### {label}")
+            group_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in groups[label]]
+            st.dataframe(pd.DataFrame(group_rows)[display_cols], use_container_width=True, hide_index=True)
+            st.markdown("")
+
+        # ── Summary metrics across all markets ──
+        st.markdown("---")
         strong_buy = [r["Ticker"] for r in results if "STRONG BUY" in r["Recommendation"]]
         buy = [r["Ticker"] for r in results if r["Recommendation"].endswith("BUY") and "STRONG" not in r["Recommendation"]]
         strong_sell = [r["Ticker"] for r in results if "STRONG SELL" in r["Recommendation"]]
