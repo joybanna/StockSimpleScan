@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -8,14 +9,8 @@ st.caption("Scan RSI & MACD signals via Yahoo Finance")
 
 DEFAULT_TICKERS = "AAPL, NVDA, MSFT, PTT.BK, ADVANC.BK, AOT.BK"
 
-ticker_input = st.text_input(
-    "Enter tickers (comma-separated):",
-    value=DEFAULT_TICKERS,
-    placeholder="e.g. AAPL, NVDA, PTT.BK"
-)
 
-scan_btn = st.button("Scan", type="primary")
-
+# ── Indicator calculations ────────────────────────────────────────────────────
 
 def calc_rsi(close, period=14):
     delta = close.diff()
@@ -34,6 +29,8 @@ def calc_macd(close, fast=12, slow=26, signal=9):
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return macd_line, signal_line
 
+
+# ── Signal helpers ────────────────────────────────────────────────────────────
 
 def get_rsi_status(rsi):
     if pd.isna(rsi):
@@ -103,13 +100,92 @@ def analyze_ticker(ticker):
         return {"Ticker": ticker.upper(), "Price": "Error", "RSI": "-", "RSI Status": "-", "MACD Status": "-", "Recommendation": str(e)[:40]}
 
 
-if scan_btn and ticker_input.strip():
-    tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
+# ── Google Sheet import ───────────────────────────────────────────────────────
+
+def sheet_url_to_csv(url: str) -> str | None:
+    """Convert any Google Sheets share/edit URL to a CSV export URL."""
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+    if not match:
+        return None
+    sheet_id = match.group(1)
+    gid_match = re.search(r"gid=(\d+)", url)
+    gid = gid_match.group(1) if gid_match else "0"
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+
+def load_tickers_from_sheet(url: str) -> list[str] | None:
+    csv_url = sheet_url_to_csv(url)
+    if not csv_url:
+        return None
+    try:
+        df = pd.read_csv(csv_url, header=None)
+        tickers = df.iloc[:, 0].dropna().astype(str).str.strip().str.upper().tolist()
+        return [t for t in tickers if t and not t.lower().startswith("ticker")]
+    except Exception:
+        return None
+
+
+def load_tickers_from_file(uploaded_file) -> list[str]:
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, header=None)
+        else:
+            df = pd.read_excel(uploaded_file, header=None)
+        tickers = df.iloc[:, 0].dropna().astype(str).str.strip().str.upper().tolist()
+        return [t for t in tickers if t and not t.lower().startswith("ticker")]
+    except Exception:
+        return []
+
+
+# ── Ticker input UI ───────────────────────────────────────────────────────────
+
+input_mode = st.radio(
+    "Ticker source:",
+    ["Manual", "Google Sheet", "Upload CSV / Excel"],
+    horizontal=True,
+)
+
+tickers_ready: list[str] = []
+
+if input_mode == "Manual":
+    ticker_input = st.text_input(
+        "Enter tickers (comma-separated):",
+        value=DEFAULT_TICKERS,
+        placeholder="e.g. AAPL, NVDA, PTT.BK",
+    )
+    tickers_ready = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
+
+elif input_mode == "Google Sheet":
+    st.caption("Sheet must be shared as **Anyone with the link can view**. Tickers should be in column A.")
+    sheet_url = st.text_input("Google Sheet URL:", placeholder="https://docs.google.com/spreadsheets/d/...")
+    if sheet_url:
+        loaded = load_tickers_from_sheet(sheet_url)
+        if loaded:
+            tickers_ready = loaded
+            st.success(f"Loaded {len(tickers_ready)} tickers: {', '.join(tickers_ready[:10])}{'...' if len(tickers_ready) > 10 else ''}")
+        else:
+            st.error("Could not read sheet. Check the URL and sharing settings.")
+
+elif input_mode == "Upload CSV / Excel":
+    st.caption("File must have tickers in the first column (no header required).")
+    uploaded = st.file_uploader("Upload file:", type=["csv", "xlsx", "xls"])
+    if uploaded:
+        tickers_ready = load_tickers_from_file(uploaded)
+        if tickers_ready:
+            st.success(f"Loaded {len(tickers_ready)} tickers: {', '.join(tickers_ready[:10])}{'...' if len(tickers_ready) > 10 else ''}")
+        else:
+            st.error("Could not read tickers. Check that tickers are in column A.")
+
+scan_btn = st.button("Scan", type="primary", disabled=not tickers_ready)
+
+# ── Scan & results ────────────────────────────────────────────────────────────
+
+if scan_btn and tickers_ready:
     results = []
 
     progress = st.progress(0, text="Fetching data...")
-    for i, ticker in enumerate(tickers):
-        progress.progress((i + 1) / len(tickers), text=f"Analyzing {ticker}...")
+    for i, ticker in enumerate(tickers_ready):
+        progress.progress((i + 1) / len(tickers_ready), text=f"Analyzing {ticker}...")
         row = analyze_ticker(ticker)
         if row:
             results.append(row)
