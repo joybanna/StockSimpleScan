@@ -1,7 +1,11 @@
 import re
 import streamlit as st
-import yfinance as yf
 import pandas as pd
+
+from core import (
+    DEFAULT_TICKERS, PRESETS, MARKET_MAP,
+    analyze_ticker,
+)
 
 st.set_page_config(page_title="Stock Scanner", layout="centered", page_icon="📈")
 
@@ -130,26 +134,10 @@ hr { border-color: #E8E0D8; margin: 1.25rem 0; }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Constants & presets
+# Constants (UI-only)
 # ─────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_TICKERS = "AAPL, NVDA, MSFT, PTT.BK, ADVANC.BK, AOT.BK"
-
-PRESETS = {
-    "Day":   {"interval": "1d",  "dl_period": "6mo", "rsi": 14, "fast": 12, "slow": 26, "signal": 9, "label": "Daily"},
-    "Week":  {"interval": "1wk", "dl_period": "2y",  "rsi": 14, "fast": 12, "slow": 26, "signal": 9, "label": "Weekly"},
-    "Month": {"interval": "1mo", "dl_period": "5y",  "rsi": 14, "fast": 12, "slow": 26, "signal": 9, "label": "Monthly"},
-}
-
-MARKET_MAP = {
-    "BK": ("🇹🇭", "Thailand (SET)"),   "HK": ("🇭🇰", "Hong Kong (HKEX)"),
-    "L":  ("🇬🇧", "London (LSE)"),     "T":  ("🇯🇵", "Japan (TSE)"),
-    "SI": ("🇸🇬", "Singapore (SGX)"),  "AX": ("🇦🇺", "Australia (ASX)"),
-    "KS": ("🇰🇷", "South Korea (KRX)"), "SS": ("🇨🇳", "China (Shanghai)"),
-    "SZ": ("🇨🇳", "China (Shenzhen)"), "NS": ("🇮🇳", "India (NSE)"),
-    "BO": ("🇮🇳", "India (BSE)"),      "PA": ("🇫🇷", "France (Euronext)"),
-    "DE": ("🇩🇪", "Germany (XETRA)"),  "TW": ("🇹🇼", "Taiwan (TWSE)"),
-}
+DEFAULT_TICKERS_STR = ", ".join(DEFAULT_TICKERS)
 
 TICKER_HELP = """
 | Market | Pattern | Example |
@@ -165,165 +153,57 @@ TICKER_HELP = """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Indicator calculations
+# Caching wrapper — results are cached per unique argument set for 5 minutes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calc_rsi(close, period=14):
-    delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_analyze_ticker(
+    ticker: str,
+    rsi_period: int,
+    macd_fast: int,
+    macd_slow: int,
+    macd_signal: int,
+    interval: str,
+    dl_period: str,
+    timeframe_label: str,
+) -> dict | None:
+    """Thin cache wrapper around core.analyze_ticker (5-minute TTL)."""
+    return analyze_ticker(
+        ticker, rsi_period, macd_fast, macd_slow, macd_signal,
+        interval, dl_period, timeframe_label,
+    )
 
 
-def calc_macd(close, fast=12, slow=26, signal=9):
-    ema_fast = close.ewm(span=fast, adjust=False).mean()
-    ema_slow = close.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    return macd_line, signal_line
+# ─────────────────────────────────────────────────────────────────────────────
+# Display helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-def get_rsi_status(rsi):
-    if pd.isna(rsi): return "N/A", ""
-    if rsi > 70:     return "Overbought", "🔴"
-    if rsi < 30:     return "Oversold",   "🟢"
-    return "Neutral", "⚪"
-
-
-def get_macd_status(macd, signal, prev_macd, prev_signal):
-    if any(pd.isna(v) for v in [macd, signal, prev_macd, prev_signal]): return "N/A", ""
-    if (prev_macd <= prev_signal) and (macd > signal): return "Golden Cross", "🟢"
-    if (prev_macd >= prev_signal) and (macd < signal): return "Death Cross",  "🔴"
-    return "Steady", "⚪"
-
-
-def get_recommendation(rsi_status, macd_status):
-    if rsi_status == "Oversold"   and macd_status == "Golden Cross": return "STRONG BUY",  "🚀"
-    if macd_status == "Golden Cross":                                 return "BUY",          "✅"
-    if rsi_status == "Overbought" and macd_status == "Death Cross":  return "STRONG SELL", "🔥"
-    if macd_status == "Death Cross":                                  return "SELL",         "❌"
-    return "WAIT", "⏳"
-
-
-def get_market(ticker: str) -> tuple[str, str]:
-    parts = ticker.upper().split(".")
-    if len(parts) > 1:
-        return MARKET_MAP.get(parts[-1], ("🌐", f"Other ({parts[-1]})"))
-    return ("🇺🇸", "US (NYSE / NASDAQ)")
-
-
-FIB_LEVELS = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618]
-
-def calc_fibonacci(high_s, low_s, price, lookback=50):
-    swing_high = float(high_s.tail(lookback).max())
-    swing_low  = float(low_s.tail(lookback).min())
-    diff       = swing_high - swing_low
-    price      = float(price)
-
-    # Retracement levels from high down + extension levels below low
-    levels = sorted(set([
-        round(swing_high - r * diff, 4) for r in FIB_LEVELS
-    ] + [
-        round(swing_low - (r - 1.0) * diff, 4) for r in [1.272, 1.618]
-    ]))
-
-    buf = price * 0.002  # 0.2% buffer to avoid sitting exactly on a level
-    above = [l for l in levels if l > price + buf]
-    below = [l for l in levels if l < price - buf]
-
-    resist  = min(above) if above else round(swing_high * 1.05, 4)
-    support = max(below) if below else round(swing_low  * 0.95, 4)
-
-    upside_pct   = round((resist  - price) / price * 100, 1)
-    downside_pct = round((price - support) / price * 100, 1)
-    rr           = round(upside_pct / downside_pct, 2) if downside_pct > 0 else 0.0
-
-    # Label nearest Fib ratio for display
-    fib_label_map = {
-        round(swing_high - r * diff, 4): f"{int(r*100) if r in [0,1] else r*100:.1f}%"
-        for r in FIB_LEVELS
-    }
-    resist_label  = fib_label_map.get(resist,  "Ext")
-    support_label = fib_label_map.get(support, "Ext")
-
+def to_display_row(r: dict, rsi_col: str) -> dict:
+    """Remap underscore-keyed core result to Streamlit DataFrame column names."""
     return {
-        "fib_resist":      resist,
-        "fib_support":     support,
-        "fib_resist_lbl":  resist_label,
-        "fib_support_lbl": support_label,
-        "upside_pct":      upside_pct,
-        "downside_pct":    downside_pct,
-        "rr":              rr,
-        "swing_high":      round(swing_high, 2),
-        "swing_low":       round(swing_low, 2),
+        "Ticker":         r["Ticker"],
+        "Price":          r["Price"],
+        "Price Date":     r["PriceDate"],
+        rsi_col:          r["RSI"],
+        "RSI Status":     r["RSI_Status"],
+        "MACD Status":    r["MACD_Status"],
+        "Recommendation": r["Recommendation"],
+        "Fib Resist":     r["Fib_Resist"],
+        "Fib Support":    r["Fib_Support"],
+        "Upside %":       r["Upside"],
+        "Downside %":     r["Downside"],
+        "R/R":            r["RR"],
     }
 
 
-def analyze_ticker(ticker, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9,
-                   interval="1d", dl_period="6mo", timeframe_label="Daily"):
-    try:
-        df = yf.download(ticker, period=dl_period, interval=interval, progress=False, auto_adjust=True)
-        if df is None or len(df) < 50:
-            return None
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        df.dropna(inplace=True)
-
-        close = df["Close"]
-        high  = df["High"]
-        low   = df["Low"]
-        rsi_series = calc_rsi(close, period=rsi_period)
-        macd_line, signal_line = calc_macd(close, fast=macd_fast, slow=macd_slow, signal=macd_signal)
-
-        rsi        = rsi_series.iloc[-1]
-        macd       = macd_line.iloc[-1]
-        signal     = signal_line.iloc[-1]
-        prev_macd, prev_signal = macd_line.iloc[-2], signal_line.iloc[-2]
-        price      = close.iloc[-1]
-        price_date = df.index[-1].strftime("%Y-%m-%d")
-
-        rsi_status, rsi_icon   = get_rsi_status(rsi)
-        macd_status, macd_icon = get_macd_status(macd, signal, prev_macd, prev_signal)
-        rec, rec_icon          = get_recommendation(rsi_status, macd_status)
-        flag, market_name      = get_market(ticker)
-        fib = calc_fibonacci(high, low, price)
-
-        return {
-            "_market_key":   market_name,
-            "_market_label": f"{flag} {market_name}",
-            "Ticker":        ticker.upper(),
-            "Price":         round(float(price), 2),
-            "Price Date":    price_date,
-            f"RSI ({rsi_period}·{timeframe_label})": round(float(rsi), 1) if not pd.isna(rsi) else "N/A",
-            "RSI Status":    f"{rsi_icon} {rsi_status}",
-            "MACD Status":   f"{macd_icon} {macd_status}",
-            "Recommendation": f"{rec_icon} {rec}",
-            "Fib Resist":    f"{fib['fib_resist']} ({fib['fib_resist_lbl']})",
-            "Fib Support":   f"{fib['fib_support']} ({fib['fib_support_lbl']})",
-            "Upside %":      f"+{fib['upside_pct']}%",
-            "Downside %":    f"-{fib['downside_pct']}%",
-            "R/R":           fib["rr"],
-        }
-    except Exception as e:
-        flag, market_name = get_market(ticker)
-        rsi_col = f"RSI ({rsi_period}·{timeframe_label})"
-        return {"_market_key": market_name, "_market_label": f"{flag} {market_name}",
-                "Ticker": ticker.upper(), "Price": "Error", "Price Date": "-",
-                rsi_col: "-", "RSI Status": "-", "MACD Status": "-",
-                "Recommendation": str(e)[:40],
-                "Fib Resist": "-", "Fib Support": "-",
-                "Upside %": "-", "Downside %": "-", "R/R": "-"}
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Import helpers
+# Import helpers (Streamlit-specific)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sheet_url_to_csv(url: str) -> str | None:
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
-    if not m: return None
+    if not m:
+        return None
     sheet_id = m.group(1)
     gid = (re.search(r"gid=(\d+)", url) or type("", (), {"group": lambda s, n: "0"})()).group(1)
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
@@ -331,7 +211,8 @@ def sheet_url_to_csv(url: str) -> str | None:
 
 def load_tickers_from_sheet(url: str) -> list[str] | None:
     csv_url = sheet_url_to_csv(url)
-    if not csv_url: return None
+    if not csv_url:
+        return None
     try:
         df = pd.read_csv(csv_url, header=None)
         tickers = df.iloc[:, 0].dropna().astype(str).str.strip().str.upper().tolist()
@@ -354,7 +235,7 @@ def load_tickers_from_file(f) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("## 📈 Stock Scanner")
-st.markdown('<p style="color:#9C8E83;font-size:0.83rem;margin-top:-0.5rem">RSI & MACD signals · powered by Yahoo Finance</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#9C8E83;font-size:0.83rem;margin-top:-0.5rem">RSI &amp; MACD signals · powered by Yahoo Finance</p>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -370,7 +251,7 @@ with left:
                           horizontal=True, label_visibility="collapsed")
 
     if input_mode == "Manual":
-        raw = st.text_input("Tickers", value=DEFAULT_TICKERS,
+        raw = st.text_input("Tickers", value=DEFAULT_TICKERS_STR,
                             placeholder="e.g. AAPL, NVDA, PTT.BK", label_visibility="collapsed")
         tickers_ready = [t.strip().upper() for t in raw.split(",") if t.strip()]
 
@@ -426,8 +307,8 @@ with st.expander("📖 How to read the results"):
 
 <div class="legend-block">
 <div class="legend-title">RSI (Relative Strength Index)</div>
-<div class="legend-row"><span class="legend-key">🔴 Overbought</span><span class="legend-val">RSI > 70 · ราคาสูงเกินไป อาจปรับตัวลง</span></div>
-<div class="legend-row"><span class="legend-key">🟢 Oversold</span><span class="legend-val">RSI < 30 · ราคาต่ำเกินไป อาจเด้งกลับ</span></div>
+<div class="legend-row"><span class="legend-key">🔴 Overbought</span><span class="legend-val">RSI &gt; 70 · ราคาสูงเกินไป อาจปรับตัวลง</span></div>
+<div class="legend-row"><span class="legend-key">🟢 Oversold</span><span class="legend-val">RSI &lt; 30 · ราคาต่ำเกินไป อาจเด้งกลับ</span></div>
 <div class="legend-row"><span class="legend-key">⚪ Neutral</span><span class="legend-val">RSI 30–70 · ยังไม่มีสัญญาณชัดเจน</span></div>
 </div>
 
@@ -453,7 +334,7 @@ with st.expander("📖 How to read the results"):
 <div class="legend-row"><span class="legend-key">Fib Support</span><span class="legend-val">ระดับรับใกล้สุด (Downside risk)</span></div>
 <div class="legend-row"><span class="legend-key">Upside %</span><span class="legend-val">% กำไรถ้าราคาถึง Fib Resist</span></div>
 <div class="legend-row"><span class="legend-key">Downside %</span><span class="legend-val">% ขาดทุนถ้าราคาถึง Fib Support</span></div>
-<div class="legend-row"><span class="legend-key">R/R</span><span class="legend-val">Upside ÷ Downside · > 1.0 คุ้มค่า</span></div>
+<div class="legend-row"><span class="legend-key">R/R</span><span class="legend-val">Upside ÷ Downside · &gt; 1.0 คุ้มค่า</span></div>
 <div class="rr-example">
 <b>ตัวอย่าง R/R = 2.0</b><br>
 ราคา 100 · Resist 108 (+8%) · Support 104 (-4%)<br>
@@ -476,11 +357,11 @@ scan_btn = st.button("Scan ▶", type="primary", disabled=not tickers_ready, use
 # ─────────────────────────────────────────────────────────────────────────────
 
 if scan_btn and tickers_ready:
-    results = []
+    results: list[dict] = []
     progress = st.progress(0, text="")
     for i, ticker in enumerate(tickers_ready):
         progress.progress((i + 1) / len(tickers_ready), text=f"Scanning {ticker}…")
-        row = analyze_ticker(
+        row = cached_analyze_ticker(
             ticker,
             rsi_period=p["rsi"], macd_fast=p["fast"], macd_slow=p["slow"], macd_signal=p["signal"],
             interval=p["interval"], dl_period=p["dl_period"], timeframe_label=p["label"],
@@ -509,25 +390,29 @@ if scan_btn and tickers_ready:
         st.markdown("---")
         for label in sorted(groups.keys(), key=market_sort_key):
             st.markdown(f"#### {label}")
-            rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in groups[label]]
+            rows = [to_display_row(r, rsi_col) for r in groups[label]]
             st.dataframe(pd.DataFrame(rows)[display_cols], use_container_width=True, hide_index=True)
             st.markdown("")
 
-        # Summary
+        # ── Summary metrics (uses _rec_key for reliable filtering) ──
         st.markdown("---")
-        strong_buy  = [r["Ticker"] for r in results if "STRONG BUY"  in r["Recommendation"]]
-        buy         = [r["Ticker"] for r in results if r["Recommendation"].endswith("BUY") and "STRONG" not in r["Recommendation"]]
-        strong_sell = [r["Ticker"] for r in results if "STRONG SELL" in r["Recommendation"]]
+        strong_buy  = [r["Ticker"] for r in results if r["_rec_key"] == "STRONG BUY"]
+        buy         = [r["Ticker"] for r in results if r["_rec_key"] == "BUY"]
+        sell        = [r["Ticker"] for r in results if r["_rec_key"] == "SELL"]
+        strong_sell = [r["Ticker"] for r in results if r["_rec_key"] == "STRONG SELL"]
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Strong Buy", len(strong_buy))
+            st.metric("🚀 Strong Buy", len(strong_buy))
             if strong_buy: st.caption(", ".join(strong_buy))
         with c2:
-            st.metric("Buy", len(buy))
+            st.metric("✅ Buy", len(buy))
             if buy: st.caption(", ".join(buy))
         with c3:
-            st.metric("Strong Sell", len(strong_sell))
+            st.metric("❌ Sell", len(sell))
+            if sell: st.caption(", ".join(sell))
+        with c4:
+            st.metric("🔥 Strong Sell", len(strong_sell))
             if strong_sell: st.caption(", ".join(strong_sell))
     else:
         st.warning("No data returned — check ticker symbols and try again.")
